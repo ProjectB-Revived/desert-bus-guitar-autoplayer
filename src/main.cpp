@@ -36,15 +36,19 @@ bool isWhiteKey(int midiNote) {
 }
 
 void tapKey(WORD vKey) {
+    UINT scanCode = MapVirtualKey(vKey, MAPVK_VK_TO_VSC);
+
     INPUT input = {};
     input.type = INPUT_KEYBOARD;
-    input.ki.wVk = vKey;
+    input.ki.wVk = 0;
+    input.ki.wScan = (WORD)scanCode;
+    input.ki.dwFlags = KEYEVENTF_SCANCODE;
 
     SendInput(1, &input, sizeof(INPUT));
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    input.ki.dwFlags = KEYEVENTF_KEYUP;
+    input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
     SendInput(1, &input, sizeof(INPUT));
 }
 
