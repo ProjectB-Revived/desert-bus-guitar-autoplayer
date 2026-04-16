@@ -36,16 +36,16 @@ bool isWhiteKey(int midiNote) {
 }
 
 void tapKey(WORD vKey) {
-    INPUT inputs[2] = {};
+    INPUT input = {};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = vKey;
 
-    inputs[0].type = INPUT_KEYBOARD;
-    inputs[0].ki.wVk = vKey;
+    SendInput(1, &input, sizeof(INPUT));
 
-    inputs[1].type = INPUT_KEYBOARD;
-    inputs[1].ki.wVk = vKey;
-    inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-    SendInput(2, inputs, sizeof(INPUT));
+    input.ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(1, &input, sizeof(INPUT));
 }
 
 std::string openFileDialog() {
@@ -114,70 +114,62 @@ int main() {
     bool playing = false;
     while (true) {
         if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
-            playing = !playing;
-            if (playing) {
-                std::cout << "Playing..." << std::endl;
-                auto startTime = std::chrono::steady_clock::now();
-                size_t nextNoteIndex = 0;
+            // Wait for key release to avoid immediate toggle
+            while (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
 
-                while (playing && nextNoteIndex < notes.size()) {
-                    if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
-                        playing = false;
-                        std::cout << "Stopped." << std::endl;
-                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                        break;
+            playing = true;
+            std::cout << "Playing..." << std::endl;
+            auto startTime = std::chrono::steady_clock::now();
+            size_t nextNoteIndex = 0;
+
+            while (playing && nextNoteIndex < notes.size()) {
+                if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
+                    // Wait for key release
+                    while (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     }
+                    playing = false;
+                    std::cout << "Stopped." << std::endl;
+                    break;
+                }
 
-                    auto currentTime = std::chrono::steady_clock::now();
-                    double elapsedSeconds = std::chrono::duration<double>(currentTime - startTime).count() * speed;
+                auto currentTime = std::chrono::steady_clock::now();
+                double elapsedSeconds = std::chrono::duration<double>(currentTime - startTime).count() * speed;
 
-                    while (nextNoteIndex < notes.size() && notes[nextNoteIndex]->seconds <= elapsedSeconds) {
-                        int midiNote = notes[nextNoteIndex]->getKeyNumber();
+                while (nextNoteIndex < notes.size() && notes[nextNoteIndex]->seconds <= elapsedSeconds) {
+                    int midiNote = notes[nextNoteIndex]->getKeyNumber();
 
-                        // Ignore sharps/flats
-                        if (isWhiteKey(midiNote)) {
-                            // Clamp
-                            int clampedNote = midiNote;
-                            if (clampedNote < 60) clampedNote = 60;
-                            if (clampedNote > 76) clampedNote = 76;
+                    if (isWhiteKey(midiNote)) {
+                        int clampedNote = midiNote;
+                        if (clampedNote < 60) clampedNote = 60;
+                        if (clampedNote > 76) clampedNote = 76;
 
-                            // If we clamped a white key (like A6) to 76 (E5), it's still a white key.
-                            // If midiNote was originally between 60 and 76 and isWhiteKey, it's in our map.
-
-                            WORD vKey = 0;
-                            for (const auto& nk : WhiteKeyMap) {
-                                if (nk.midiNote == clampedNote) {
-                                    vKey = nk.vKey;
-                                    break;
-                                }
-                            }
-
-                            // If still 0, it means clampedNote is a white key but not in our 10-key map.
-                            // This happens if clampedNote is a white key between 60 and 76 that we didn't map?
-                            // No, our map has all white keys from 60 to 76.
-                            // Wait, 60, 62, 64, 65, 67, 69, 71, 72, 74, 76 are the notes in WhiteKeyMap.
-                            // Are there any other white keys?
-                            // 60(C), 61(C#), 62(D), 63(D#), 64(E), 65(F), 66(F#), 67(G), 68(G#), 69(A), 70(A#), 71(B), 72(C), 73(C#), 74(D), 75(D#), 76(E).
-                            // Yes, all white keys in range [60, 76] are in the map.
-
-                            if (vKey != 0) {
-                                tapKey(vKey);
+                        WORD vKey = 0;
+                        for (const auto& nk : WhiteKeyMap) {
+                            if (nk.midiNote == clampedNote) {
+                                vKey = nk.vKey;
+                                break;
                             }
                         }
-                        nextNoteIndex++;
+
+                        if (vKey != 0) {
+                            tapKey(vKey);
+                        }
                     }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    nextNoteIndex++;
                 }
-                if (nextNoteIndex >= notes.size()) {
-                    std::cout << "Finished playback." << std::endl;
-                    playing = false;
-                }
-            } else {
-                std::cout << "Stopped." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+            if (nextNoteIndex >= notes.size()) {
+                std::cout << "Finished playback." << std::endl;
+            }
+            playing = false;
+            std::cout << "Press ESC to start again." << std::endl;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     return 0;

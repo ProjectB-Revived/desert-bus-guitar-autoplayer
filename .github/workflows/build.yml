@@ -11,7 +11,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Configure CMake
       run: cmake -B build -G "Visual Studio 17 2022" -A x64
@@ -23,26 +23,16 @@ jobs:
       id: random_name
       shell: bash
       run: |
-        RANDNAME=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 8 | head -n 1)
+        RANDNAME=$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 8)
         echo "name=$RANDNAME" >> $GITHUB_OUTPUT
 
     - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.random_name.outputs.name }}
-        release_name: Release ${{ steps.random_name.outputs.name }}
+        name: Release ${{ steps.random_name.outputs.name }}
+        files: ./build/Release/DesertBusAutoPlayer.exe
         draft: false
         prerelease: false
-
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./build/Release/DesertBusAutoPlayer.exe
-        asset_name: DesertBusAutoPlayer.exe
-        asset_content_type: application/vnd.microsoft.portable-executable
