@@ -30,6 +30,17 @@ const std::vector<NoteKey> WhiteKeyMap = {
     {76, 0x4C}  // E5 - l
 };
 
+// Complex Mode Fret Keys (20 frets)
+const std::vector<WORD> ComplexFretKeys = {
+    0x45, 0x52, 0x54, 0x59, 0x55, 0x50, 0xBD, 0xBB, 0xDB, 0xDD, // E R T Y U P - = [ ]
+    0x46, 0x47, 0x48, 0x4A, 0x4B, 0x4C, 0xBA, 0xDE, 0x4D, 0xBC  // F G H J K L ; ' M ,
+};
+
+// Complex Mode Play Keys (6 keys)
+const std::vector<WORD> ComplexPlayKeys = {
+    0x5A, 0x58, 0x43, 0x56, 0x42, 0x4E // Z X C V B N
+};
+
 bool isWhiteKey(int midiNote) {
     int note = midiNote % 12;
     return (note == 0 || note == 2 || note == 4 || note == 5 || note == 7 || note == 9 || note == 11);
@@ -83,6 +94,17 @@ int main() {
         return 0;
     }
 
+    bool complexMode = false;
+    std::cout << "Enable Complex Mode? (y/n): ";
+    char choice;
+    std::cin >> choice;
+    if (choice == 'y' || choice == 'Y') {
+        complexMode = true;
+        std::cout << "Complex Mode enabled." << std::endl;
+    } else {
+        std::cout << "Simple Mode enabled." << std::endl;
+    }
+
     double speed = 1.0;
     std::cout << "Enter playback speed (e.g., 1.0 for normal, 2.0 for double): ";
     if (!(std::cin >> speed)) {
@@ -127,6 +149,7 @@ int main() {
             std::cout << "Playing..." << std::endl;
             auto startTime = std::chrono::steady_clock::now();
             size_t nextNoteIndex = 0;
+            int currentFret = -1;
 
             while (playing && nextNoteIndex < notes.size()) {
                 if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
@@ -145,21 +168,66 @@ int main() {
                 while (nextNoteIndex < notes.size() && notes[nextNoteIndex]->seconds <= elapsedSeconds) {
                     int midiNote = notes[nextNoteIndex]->getKeyNumber();
 
-                    if (isWhiteKey(midiNote)) {
+                    if (complexMode) {
+                        // Complex Mode: Chromatic, 20 frets + 6 strings
+                        // Range: 60 (C4) to 60 + 19 + 5 = 84 (C6)
                         int clampedNote = midiNote;
                         if (clampedNote < 60) clampedNote = 60;
-                        if (clampedNote > 76) clampedNote = 76;
+                        if (clampedNote > 84) clampedNote = 84;
 
-                        WORD vKey = 0;
-                        for (const auto& nk : WhiteKeyMap) {
-                            if (nk.midiNote == clampedNote) {
-                                vKey = nk.vKey;
-                                break;
+                        int fretNeeded = -1;
+                        // If current fret can play this note, keep it
+                        if (currentFret != -1) {
+                            int playIndex = clampedNote - 60 - currentFret;
+                            if (playIndex >= 0 && playIndex < 6) {
+                                fretNeeded = currentFret;
                             }
                         }
 
-                        if (vKey != 0) {
-                            tapKey(vKey);
+                        // Otherwise, find a fret that can play this note (try to center it)
+                        if (fretNeeded == -1) {
+                            fretNeeded = clampedNote - 60 - 2;
+                            if (fretNeeded < 0) fretNeeded = 0;
+                            if (fretNeeded > 19) fretNeeded = 19;
+
+                            // Re-verify if this fret can actually play the note
+                            int playIndex = clampedNote - 60 - fretNeeded;
+                            if (playIndex < 0 || playIndex >= 6) {
+                                // Fallback: just use the lowest possible fret that works
+                                fretNeeded = clampedNote - 60 - 5;
+                                if (fretNeeded < 0) fretNeeded = 0;
+                            }
+                        }
+
+                        if (fretNeeded != currentFret) {
+                            tapKey(ComplexFretKeys[fretNeeded]);
+                            currentFret = fretNeeded;
+                            // Small delay after fret change to ensure game registers it
+                            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                        }
+
+                        int playIndex = clampedNote - 60 - currentFret;
+                        if (playIndex >= 0 && playIndex < 6) {
+                            tapKey(ComplexPlayKeys[playIndex]);
+                        }
+                    } else {
+                        // Simple Mode: White keys only, C4 to E5
+                        if (isWhiteKey(midiNote)) {
+                            int clampedNote = midiNote;
+                            if (clampedNote < 60) clampedNote = 60;
+                            if (clampedNote > 76) clampedNote = 76;
+
+                            WORD vKey = 0;
+                            for (const auto& nk : WhiteKeyMap) {
+                                if (nk.midiNote == clampedNote) {
+                                    vKey = nk.vKey;
+                                    break;
+                                }
+                            }
+
+                            if (vKey != 0) {
+                                tapKey(vKey);
+                            }
                         }
                     }
                     nextNoteIndex++;
