@@ -15,7 +15,11 @@ file(GLOB SOURCES "src/*.cpp")
 
 add_executable(DesertBusAutoPlayer ${SOURCES})
 
-target_link_libraries(DesertBusAutoPlayer Comdlg32.lib User32.lib)
+if(MSVC)
+    target_link_libraries(DesertBusAutoPlayer Comdlg32.lib User32.lib)
+else()
+    target_link_libraries(DesertBusAutoPlayer comdlg32 user32)
+endif()
 
 if(MSVC)
     target_compile_options(DesertBusAutoPlayer PRIVATE /MT)
