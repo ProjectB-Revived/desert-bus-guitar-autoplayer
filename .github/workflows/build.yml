@@ -1,0 +1,38 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure CMake
+      run: cmake -B build -G "Visual Studio 17 2022" -A x64
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Generate Random Name
+      id: random_name
+      shell: bash
+      run: |
+        RANDNAME=$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 8)
+        echo "name=$RANDNAME" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.random_name.outputs.name }}
+        name: Release ${{ steps.random_name.outputs.name }}
+        files: ./build/Release/DesertBusAutoPlayer.exe
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
