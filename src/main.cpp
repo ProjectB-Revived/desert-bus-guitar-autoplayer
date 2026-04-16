@@ -7,6 +7,7 @@
 #include <thread>
 #include <chrono>
 #include <algorithm>
+#include <cmath>
 
 using namespace smf;
 
@@ -46,21 +47,32 @@ bool isWhiteKey(int midiNote) {
     return (note == 0 || note == 2 || note == 4 || note == 5 || note == 7 || note == 9 || note == 11);
 }
 
-void tapKey(WORD vKey) {
-    UINT scanCode = MapVirtualKey(vKey, MAPVK_VK_TO_VSC);
+void tapKeys(const std::vector<WORD>& vKeys) {
+    if (vKeys.empty()) return;
 
-    INPUT input = {};
-    input.type = INPUT_KEYBOARD;
-    input.ki.wVk = 0;
-    input.ki.wScan = (WORD)scanCode;
-    input.ki.dwFlags = KEYEVENTF_SCANCODE;
+    std::vector<INPUT> inputs;
+    for (WORD vKey : vKeys) {
+        UINT scanCode = MapVirtualKey(vKey, MAPVK_VK_TO_VSC);
+        INPUT input = {};
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = 0;
+        input.ki.wScan = (WORD)scanCode;
+        input.ki.dwFlags = KEYEVENTF_SCANCODE;
+        inputs.push_back(input);
+    }
 
-    SendInput(1, &input, sizeof(INPUT));
+    SendInput((UINT)inputs.size(), inputs.data(), sizeof(INPUT));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-    SendInput(1, &input, sizeof(INPUT));
+    for (auto& input : inputs) {
+        input.ki.dwFlags |= KEYEVENTF_KEYUP;
+    }
+    SendInput((UINT)inputs.size(), inputs.data(), sizeof(INPUT));
+}
+
+void tapKey(WORD vKey) {
+    tapKeys({vKey});
 }
 
 std::string openFileDialog() {
@@ -119,12 +131,26 @@ int main() {
 
     midifile.doTimeAnalysis();
     midifile.linkNotePairs();
+    midifile.joinTracks();
 
     std::vector<MidiEvent*> notes;
-    for (int track = 0; track < midifile.getTrackCount(); track++) {
-        for (int event = 0; event < midifile.getEventCount(track); event++) {
-            if (midifile[track][event].isNoteOn()) {
-                notes.push_back(&midifile[track][event]);
+    int channelPrograms[16] = {0}; // Default to Acoustic Grand Piano
+
+    for (int event = 0; event < midifile.getEventCount(0); event++) {
+        MidiEvent& mev = midifile[0][event];
+        if (mev.isPatchChange()) {
+            channelPrograms[mev.getChannel()] = mev.getP1();
+        } else if (mev.isNoteOn() && mev.getVelocity() > 0) {
+            int channel = mev.getChannel();
+            int program = channelPrograms[channel];
+
+            // Filter: No drums (Channel 10, index 9)
+            // Programs: Piano (0-7), Guitar (24-31)
+            bool isPiano = (program >= 0 && program <= 7);
+            bool isGuitar = (program >= 24 && program <= 31);
+
+            if (channel != 9 && (isPiano || isGuitar)) {
+                notes.push_back(&mev);
             }
         }
     }
@@ -166,71 +192,72 @@ int main() {
                 double elapsedSeconds = std::chrono::duration<double>(currentTime - startTime).count() * speed;
 
                 while (nextNoteIndex < notes.size() && notes[nextNoteIndex]->seconds <= elapsedSeconds) {
-                    int midiNote = notes[nextNoteIndex]->getKeyNumber();
+                    std::vector<MidiEvent*> currentChord;
+                    double chordStartTime = notes[nextNoteIndex]->seconds;
+                    while (nextNoteIndex < notes.size() && notes[nextNoteIndex]->seconds <= chordStartTime + 0.010) {
+                        currentChord.push_back(notes[nextNoteIndex]);
+                        nextNoteIndex++;
+                    }
 
                     if (complexMode) {
-                        // Complex Mode: Chromatic, 20 frets + 6 strings
-                        // Range: 60 (C4) to 60 + 19 + 5 = 84 (C6)
-                        int clampedNote = midiNote;
-                        if (clampedNote < 60) clampedNote = 60;
-                        if (clampedNote > 84) clampedNote = 84;
+                        // Find the best fret for this chord
+                        int bestFret = -1;
+                        int maxPlayable = -1;
 
-                        int fretNeeded = -1;
-                        // If current fret can play this note, keep it
-                        if (currentFret != -1) {
-                            int playIndex = clampedNote - 60 - currentFret;
-                            if (playIndex >= 0 && playIndex < 6) {
-                                fretNeeded = currentFret;
+                        for (int f = 0; f < 20; f++) {
+                            int playable = 0;
+                            for (auto note : currentChord) {
+                                int clamped = std::max(60, std::min(84, note->getKeyNumber()));
+                                int idx = clamped - 60 - f;
+                                if (idx >= 0 && idx < 6) playable++;
+                            }
+                            if (playable > maxPlayable) {
+                                maxPlayable = playable;
+                                bestFret = f;
+                            } else if (playable == maxPlayable && currentFret != -1) {
+                                if (f == currentFret) bestFret = f;
+                                else if (bestFret != currentFret && std::abs(f - currentFret) < std::abs(bestFret - currentFret)) {
+                                    bestFret = f;
+                                }
                             }
                         }
 
-                        // Otherwise, find a fret that can play this note (try to center it)
-                        if (fretNeeded == -1) {
-                            fretNeeded = clampedNote - 60 - 2;
-                            if (fretNeeded < 0) fretNeeded = 0;
-                            if (fretNeeded > 19) fretNeeded = 19;
-
-                            // Re-verify if this fret can actually play the note
-                            int playIndex = clampedNote - 60 - fretNeeded;
-                            if (playIndex < 0 || playIndex >= 6) {
-                                // Fallback: just use the lowest possible fret that works
-                                fretNeeded = clampedNote - 60 - 5;
-                                if (fretNeeded < 0) fretNeeded = 0;
-                            }
-                        }
-
-                        if (fretNeeded != currentFret) {
-                            tapKey(ComplexFretKeys[fretNeeded]);
-                            currentFret = fretNeeded;
-                            // Small delay after fret change to ensure game registers it
+                        if (bestFret != -1 && bestFret != currentFret) {
+                            tapKey(ComplexFretKeys[bestFret]);
+                            currentFret = bestFret;
                             std::this_thread::sleep_for(std::chrono::milliseconds(20));
                         }
 
-                        int playIndex = clampedNote - 60 - currentFret;
-                        if (playIndex >= 0 && playIndex < 6) {
-                            tapKey(ComplexPlayKeys[playIndex]);
+                        std::vector<WORD> keysToPlay;
+                        for (auto note : currentChord) {
+                            int clamped = std::max(60, std::min(84, note->getKeyNumber()));
+                            int idx = clamped - 60 - currentFret;
+                            if (idx >= 0 && idx < 6) {
+                                keysToPlay.push_back(ComplexPlayKeys[idx]);
+                            }
+                        }
+                        if (!keysToPlay.empty()) {
+                            tapKeys(keysToPlay);
                         }
                     } else {
                         // Simple Mode: White keys only, C4 to E5
-                        if (isWhiteKey(midiNote)) {
-                            int clampedNote = midiNote;
-                            if (clampedNote < 60) clampedNote = 60;
-                            if (clampedNote > 76) clampedNote = 76;
-
-                            WORD vKey = 0;
-                            for (const auto& nk : WhiteKeyMap) {
-                                if (nk.midiNote == clampedNote) {
-                                    vKey = nk.vKey;
-                                    break;
+                        for (auto note : currentChord) {
+                            int midiNote = note->getKeyNumber();
+                            if (isWhiteKey(midiNote)) {
+                                int clampedNote = std::max(60, std::min(76, midiNote));
+                                WORD vKey = 0;
+                                for (const auto& nk : WhiteKeyMap) {
+                                    if (nk.midiNote == clampedNote) {
+                                        vKey = nk.vKey;
+                                        break;
+                                    }
                                 }
-                            }
-
-                            if (vKey != 0) {
-                                tapKey(vKey);
+                                if (vKey != 0) {
+                                    tapKey(vKey);
+                                }
                             }
                         }
                     }
-                    nextNoteIndex++;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
