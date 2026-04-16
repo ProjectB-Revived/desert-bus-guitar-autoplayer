@@ -1,4 +1,5 @@
 #include "MidiFile.h"
+#define NOMINMAX
 #include <windows.h>
 #include <commdlg.h>
 #include <iostream>
